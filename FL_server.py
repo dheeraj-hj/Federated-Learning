@@ -1,94 +1,126 @@
-import tensorflow as tf
-import tensorflow_federated as tff
+import numpy as np
+import pandas as pd
+import random
+import cv2
+import os
+from tqdm import tqdm
+import matplotlib
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelBinarizer
+from sklearn.model_selection import train_test_split
+from sklearn.utils import shuffle
+from sklearn.metrics import accuracy_score
 import socket
 import pickle
-import matplotlib.pyplot as plt
+import struct
 
-# Create a simple model
-def create_keras_model():
-    model = tf.keras.models.Sequential([
-        tf.keras.layers.Conv2D(32, (3, 3), activation='relu', input_shape=(28, 28, 1)),
-        tf.keras.layers.MaxPooling2D((2, 2)),
-        tf.keras.layers.Flatten(),
-        tf.keras.layers.Dense(10, activation='softmax')
-    ])
-    return model
+import tensorflow as tf
+from tensorflow import expand_dims
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv2D, Input, Lambda
+from tensorflow.keras.layers import MaxPooling2D
+from tensorflow.keras.layers import Activation
+from tensorflow.keras.layers import Flatten
+from tensorflow.keras.layers import Dense
+from tensorflow.keras.optimizers import SGD
+from tensorflow.keras import backend as K
+from imutils import paths
 
-def model_fn():
-    keras_model = create_keras_model()
-    return tff.learning.from_keras_model(
-        keras_model,
-        input_spec=client_data[0].element_spec,
-        loss=tf.keras.losses.SparseCategoricalCrossentropy(),
-        metrics=[tf.keras.metrics.SparseCategoricalAccuracy()])
+from FL_common import *
+    
+# Federated averaging
+def federated_averaging(scaled_weight_list):
+    '''Return the sum of the listed scaled weights. The is equivalent to scaled avg of the weights'''
+    avg_grad = list()
+    #get the average grad accross all client gradients
+    for grad_list_tuple in zip(*scaled_weight_list):
+        layer_mean = tf.math.reduce_sum(grad_list_tuple, axis=0)
+        avg_grad.append(layer_mean)
+        
+    return avg_grad
 
-# Create federated learning process
-iterative_process = tff.learning.build_federated_averaging_process(model_fn)
-state = iterative_process.initialize()
+def test_model(X_test, Y_test,  model, comm_round):
+    cce = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
+    #logits = model.predict(X_test, batch_size=100)
+    logits = model.predict(X_test)
+    loss = cce(Y_test, logits)
+    acc = accuracy_score(tf.argmax(logits, axis=1), tf.argmax(Y_test, axis=1))
+    print('comm_round: {} | global_acc: {:.3%} | global_loss: {}'.format(comm_round, acc, loss))
+    return acc, loss
 
-# Network configuration
-HOST = '127.0.0.1'  # Localhost
-PORT = 65432        # Port to listen on
-
-def receive_data(conn):
-    data = b''
-    while True:
-        packet = conn.recv(4096)
-        if not packet: break
-        data += packet
-    return pickle.loads(data)
-
-def send_data(conn, data):
-    conn.sendall(pickle.dumps(data))
-
-# Track metrics
-accuracy_list = []
-loss_list = []
 
 # Start the server
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-    s.bind((HOST, PORT))
-    s.listen()
-    print('Server started and listening')
+def start_server(num_clients, num_rounds):
+    smlp_global = SimpleMLP()
+    global_model = smlp_global.build(build_shape, 10)
+    global_weights = global_model.get_weights()
+    global_acc_list = []
+    global_loss_list = []
+
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) # to make the server reuse the port
+    server_socket.bind(("localhost",4444))
+    server_socket.listen(num_clients)
+    print(f"Server is listening for {num_clients} clients...")
+
+    client_sockets = []
+    for client_id in range(num_clients):
+        client_socket, _ = server_socket.accept()
+        client_sockets.append(client_socket)
+        print(f"Client {client_id + 1} connected.")
+
+    for round_num in range(num_rounds):
+        print(f"\n--- Round {round_num + 1} ---")
+        client_weights_list = []
+        global_weights = global_model.get_weights()
+        for client_id, client_socket in enumerate(client_sockets):
+            print(f"Sending global model weights to client {client_id + 1}...")
+            send_data(client_socket, global_weights)
+
+            print(f"Receiving updated weights from client {client_id + 1}...")
+            client_weights = recv_data(client_socket)
+            client_weights_list.append(client_weights)
+
+        print("Performing federated averaging...")
+        avgweights = federated_averaging(client_weights_list)
+        global_model.set_weights(avgweights)
+
+        # Evaluate global model
+        for(X_test, Y_test) in test_batched:
+            global_acc, global_loss= test_model(X_test, Y_test, global_model, num_rounds)
+            global_acc_list.append(global_acc)
+            global_loss_list.append(global_loss)
+
+        
+
+    for client_socket in client_sockets:
+        client_socket.close()
+    server_socket.close()
+    return global_acc_list , global_loss_list
+
+# Load MNIST data
+(x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
+x_test = x_test.astype('float32') / 255
+x_test = x_test.reshape((-1, 28 * 28))
+lb = LabelBinarizer()
+y_test = lb.fit_transform(y_test)
+build_shape = 784
+test_batched = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(len(y_test))
+
+import sys  
+
+if __name__ == "__main__":
+    num_rounds = 50
+    global_acc_list , global_loss_list = start_server(num_clients, num_rounds)
+
     
-    for round_num in range(10):
-        client_updates = []
-        for _ in range(2):  # Assume 4 clients
-            conn, addr = s.accept()
-            with conn:
-                print('Connected by', addr)
-                client_data = receive_data(conn)
-                client_updates.append(client_data)
-        
-        # Aggregate client updates
-        state, metrics = iterative_process.next(state, client_updates)
-        print(f'Round {round_num+1}, Metrics={metrics}')
-        
-        accuracy_list.append(metrics['train']['sparse_categorical_accuracy'])
-        loss_list.append(metrics['train']['loss'])
-        
-        # Send updated model to clients
-        for _ in range(2):
-            conn, addr = s.accept()
-            with conn:
-                send_data(conn, state)
+    print("plotting graph")
+    plt.figure(figsize=(16,4))
+    plt.subplot(121)
+    plt.plot(list(range(0,len(global_loss_list))), global_loss_list)
+    plt.subplot(122)
+    plt.plot(list(range(0,len(global_acc_list))), global_acc_list)
+    print('total comm rounds', len(global_acc_list))
 
-# Plotting accuracy and loss vs rounds
-plt.figure(figsize=(12, 5))
-
-# Accuracy plot
-plt.subplot(1, 2, 1)
-plt.plot(range(1, 11), accuracy_list, marker='o')
-plt.title('Accuracy vs. Number of Rounds')
-plt.xlabel('Number of Rounds')
-plt.ylabel('Accuracy')
-
-# Loss plot
-plt.subplot(1, 2, 2)
-plt.plot(range(1, 11), loss_list, marker='o')
-plt.title('Loss vs. Number of Rounds')
-plt.xlabel('Number of Rounds')
-plt.ylabel('Loss')
-
-plt.tight_layout()
-plt.show()
+    plt.show()  # Display the plot
