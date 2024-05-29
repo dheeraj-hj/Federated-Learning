@@ -1,6 +1,6 @@
 import pickle
 import struct
-
+#no of clients
 num_clients = 2
 
 # Send data with length prefix
@@ -48,3 +48,53 @@ class SimpleMLP:
         model.add(Dense(classes))
         model.add(Activation("softmax"))
         return model
+    
+import tensorflow as tf
+import random
+# import random_seed
+from sklearn.preprocessing import LabelBinarizer
+
+(x_train, y_train), _ = tf.keras.datasets.mnist.load_data()
+x_train = x_train.astype('float32') / 255
+x_train = x_train.reshape((-1, 28 * 28))
+lb = LabelBinarizer()
+y_train = lb.fit_transform(y_train)
+
+data = list(zip(x_train, y_train))
+# random.seed(random_seed)
+# random.shuffle(data)
+
+# partition_size = len(data) // num_clients
+
+# partitions = []
+    
+#     # Split the data into partitions
+# for i in range(num_clients):
+#     start = i * partition_size
+#     if i == num_clients - 1:  # The last partition may contain more items if the division is not exact
+#         end = len(data)
+#     else:
+#         end = start + partition_size
+#     partitions.append(data[start:end])
+
+random.shuffle(data)
+
+partition_size = len(data) // num_clients
+
+partitions = []
+for i in range(num_clients):
+    start = i * partition_size
+    if i == num_clients - 1:  # The last partition may contain more items if the division is not exact
+        end = len(data)
+    else:
+        end = start + partition_size
+    partitions.append(data[start:end])
+
+def clientdata(client_id):
+
+    return partitions[client_id]
+
+
+
+
+

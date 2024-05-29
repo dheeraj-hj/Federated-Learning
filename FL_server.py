@@ -29,13 +29,16 @@ from imutils import paths
 
 from FL_common import *
     
-# Federated averaging
+# Federated averaging algorithm
 def federated_averaging(scaled_weight_list):
-    '''Return the sum of the listed scaled weights. The is equivalent to scaled avg of the weights'''
-    avg_grad = list()
-    #get the average grad accross all client gradients
+    '''Return the federated average of the listed scaled weights. This is equivalent to the scaled average of the weights.'''
+    avg_grad = []
+    num_clients = len(scaled_weight_list)
+    
+    # Get the average gradient across all client gradients
     for grad_list_tuple in zip(*scaled_weight_list):
-        layer_mean = tf.math.reduce_sum(grad_list_tuple, axis=0)
+        layer_sum = tf.math.reduce_sum(grad_list_tuple, axis=0)
+        layer_mean = layer_sum / num_clients
         avg_grad.append(layer_mean)
         
     return avg_grad
@@ -111,7 +114,7 @@ test_batched = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(len(y_
 import sys  
 
 if __name__ == "__main__":
-    num_rounds = 50
+    num_rounds = 30
     global_acc_list , global_loss_list = start_server(num_clients, num_rounds)
 
     
