@@ -1,0 +1,9 @@
+numpy
+pandas
+tqdm
+matplotlib
+scikit-learn
+tensorflow
+opencv-python-headless
+imutils
+
