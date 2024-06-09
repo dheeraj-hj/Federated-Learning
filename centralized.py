@@ -22,28 +22,6 @@ from imutils import paths
 matplotlib.use('Agg')  # or 'TkAgg', 'Agg', etc.
 debug = 0
 
-def load(paths, verbose=-1):
-    '''expects images for each class in separate dir,
-    e.g all digits in 0 class in the directory named 0 '''
-    data = list()
-    labels = list()
-    # loop over the input images
-    for (i, imgpath) in enumerate(paths):
-        # load the image and extract the class labels
-        im_gray = cv2.imread(imgpath, cv2.IMREAD_GRAYSCALE)
-        image = np.array(im_gray).flatten() # cv2.imread(imgpath)
-        # print(image.shape)
-        label = imgpath.split(os.path.sep)[-2]
-        # scale the image to [0, 1] and add to list
-        data.append(image / 255)
-        labels.append(label)
-        # show an update every `verbose` images
-        if verbose > 0 and i > 0 and (i + 1) % verbose == 0:
-            print("[INFO] processed {}/{}".format(i + 1, len(paths)))
-    # return a tuple of the data and labels
-
-    return data, labels
-
 def batch_data(image_list, label_list, bs=32):
     '''create a tfds object
     args:
@@ -67,17 +45,20 @@ def test_model(X_test, Y_test, model, comm_round):
     print('comm_round: {} | global_acc: {:.3%} | global_loss: {}'.format(comm_round, acc, loss))
     return acc, loss
 
-class SimpleMLP:
+class CNNModel:
     @staticmethod
     def build(shape, classes):
         model = Sequential()
-        model.add(Conv2D(32, kernel_size=(3, 3), activation='relu', input_shape=(28, 28, 1)))
+        # 32 filters captures basic features , 3x3 kernels convolves and 32 feature maps are generated
+        model.add(Conv2D(32, kernel_size=(3, 3), activation='relu', input_shape=(28, 28, 1))) 
         model.add(MaxPooling2D(pool_size=(2, 2)))
-        model.add(Conv2D(64, kernel_size=(3, 3), activation='relu'))
+        # 64 filters each 3x3 kernel convolves over 32 feature maps and 64 feature maps are generated
+        model.add(Conv2D(64, kernel_size=(3, 3), activation='relu'))#relu -> max(0, x) 
         model.add(MaxPooling2D(pool_size=(2, 2)))
         model.add(Flatten())
+        # 128 neurons in the fully connected layer
         model.add(Dense(128, activation='relu'))
-        model.add(Dense(classes, activation='softmax'))
+        model.add(Dense(classes, activation='softmax')) # softmax -> probability distribution (e^zi / sum(e^zj))
         return model
 
 # Load the MNIST dataset
@@ -102,15 +83,15 @@ train_batched = batch_data(train_images, train_labels)
 # Process and batch the test set
 test_batched = tf.data.Dataset.from_tensor_slices((test_images, test_labels)).batch(len(test_labels))
 
-lr = 0.01
+lr = 0.01 
 comms_round = 50
-loss = 'categorical_crossentropy'
-metrics = ['accuracy']
-optimizer = SGD(learning_rate=lr, momentum=0.9)
+loss = 'categorical_crossentropy' # categorical_crossentropy because there are 10 classes (-1/n * sum(yi*log(yi_hat))
+metrics = ['accuracy'] # Additional metrics to monitor during training and evaluation.
+optimizer = SGD(learning_rate=lr, momentum=0.9) # lr -> rate at which it moves to minumum(must be exponentially decreasing), momentum -> parameter to speed up optimization
 
 # Initialize global model
 build_shape = (28, 28, 1)
-smlp_global = SimpleMLP()
+smlp_global = CNNModel()
 global_model = smlp_global.build(build_shape, 10)
 global_acc_list = []
 global_loss_list = []
@@ -121,7 +102,8 @@ for comm_round in range(comms_round):
     global_weights = global_model.get_weights()
     # Train the global model using the entire dataset
     global_model.compile(loss=loss, optimizer=optimizer, metrics=metrics)
-    global_model.fit(train_batched, epochs=1, verbose=0)
+    # epochs - number of times the model will iterate over the entire training dataset , verbose 0: No output is displayed during training (silent mode)
+    global_model.fit(train_batched, epochs=1, verbose=0) 
 
     # Test global model and print out metrics after each communication round
     for (X_test, Y_test) in test_batched:
