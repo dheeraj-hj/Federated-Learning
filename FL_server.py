@@ -55,8 +55,8 @@ def test_model(X_test, Y_test,  model, comm_round):
 
 # Start the server
 def start_server(num_clients, num_rounds):
-    smlp_global = SimpleMLP()
-    global_model = smlp_global.build(build_shape, 10)
+    smlp_global = CNNModel()
+    global_model = smlp_global.build(10)
     global_weights = global_model.get_weights()
     global_acc_list = []
     global_loss_list = []
@@ -105,10 +105,9 @@ def start_server(num_clients, num_rounds):
 # Load MNIST data
 (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
 x_test = x_test.astype('float32') / 255
-x_test = x_test.reshape((-1, 28 * 28))
+x_test = x_test.reshape((-1, 28, 28, 1))
 lb = LabelBinarizer()
 y_test = lb.fit_transform(y_test)
-build_shape = 784
 test_batched = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(len(y_test))
 
 import sys  

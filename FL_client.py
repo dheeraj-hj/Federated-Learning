@@ -29,26 +29,6 @@ from imutils import paths
     
 from FL_common import *
 
-
-def scale_model_weights(weight, scalar):
-    '''function for scaling a models weights'''
-    weight_final = []
-    steps = len(weight)
-    for i in range(steps):
-        weight_final.append(scalar * weight[i])
-    return weight_final
-
-# Initialize the client model
-def create_model():
-    model = models.Sequential([
-        layers.Flatten(input_shape=(28, 28)),
-        layers.Dense(128, activation='relu'),
-        layers.Dense(10, activation='softmax')
-    ])
-    model.compile(optimizer='adam',
-                  loss='sparse_categorical_crossentropy',
-                  metrics=['accuracy'])
-    return model
 # batch data with tfds
 def batch_data(data_shard, bs=32):
     '''Takes in a clients data shard and create a tfds object off it
@@ -79,7 +59,7 @@ def batch_data1(image_list, label_list, bs=32):
 # Start the client
 
 def start_client(id, num_rounds, epochs=1, num_clients=2):
-    smlp_local = SimpleMLP()
+    smlp_local = CNNModel()
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client_socket.connect(('localhost', 4444))
     lr = 0.01
@@ -87,12 +67,11 @@ def start_client(id, num_rounds, epochs=1, num_clients=2):
     comms_round = 30
     loss='categorical_crossentropy'
     metrics = ['accuracy']
-    build_shape = 784
 
     
     for round_num in range(num_rounds):
         optimizer = SGD(learning_rate=lr, momentum=0.9)
-        local_model = smlp_local.build(build_shape, 10)
+        local_model = smlp_local.build(10)
         local_model.compile(loss=loss, 
                         optimizer=optimizer, 
                         metrics=metrics)
