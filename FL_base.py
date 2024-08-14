@@ -26,12 +26,14 @@ from tensorflow.keras.layers import Dense
 from tensorflow.keras.optimizers import SGD
 from tensorflow.keras import backend as K
 from imutils import paths
-
+from pathlib import Path
 
 
 #no of clients
-num_clients = 3
-
+num_clients = 16
+client_frac = 0.25
+lr = 0.01 
+num_rounds = 20
 
 class CNNModel:
     @staticmethod
@@ -81,25 +83,6 @@ def batch_data1(image_list, label_list, bs=32):
     return dataset.shuffle(len(label)).batch(bs)
 
 
-# Federated averaging algorithm
-def federated_averaging(scaled_weight_list):
-    '''Return the sum of the listed scaled weights. The is equivalent to scaled avg of the weights'''
-    avg_grad = list()
-    #get the average grad accross all client gradients
-    '''Return the federated average of the listed scaled weights. This is equivalent to the scaled average of the weights.'''
-    avg_grad = []
-    num_clients = len(scaled_weight_list)
-
-    # Get the average gradient across all client gradients
-    for grad_list_tuple in zip(*scaled_weight_list):
-        layer_mean = tf.math.reduce_sum(grad_list_tuple, axis=0)
-        layer_sum = tf.math.reduce_sum(grad_list_tuple, axis=0)
-        layer_mean = layer_sum / num_clients
-        avg_grad.append(layer_mean)
-
-    return avg_grad
-
-
 def test_model(X_test, Y_test,  model, comm_round):
     cce = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
     #logits = model.predict(X_test, batch_size=100)
@@ -143,73 +126,73 @@ for i in range(num_clients):
         end = start + partition_size
     partitions.append(data[start:end])
 
+loss = 'categorical_crossentropy' # categorical_crossentropy because there are 10 classes (-1/n * sum(yi*log(yi_hat))
+metrics = ['accuracy'] # Additional metrics to monitor during training and evaluation.
+optimizer = SGD(learning_rate=lr, momentum=0.9) # lr -> rate at which it moves to minumum(must be exponentially decreasing), momentum -> parameter to speed up optimization
 
-
-def client_modelupdate(client_id , global_weights):
+def client_model_update_generator():
     smlp_local = CNNModel()
-    lr = 0.01
-    loss='categorical_crossentropy'
-    metrics = ['accuracy']
-    optimizer = SGD(learning_rate=lr, momentum=0.9)
     local_model = smlp_local.build(10)
     local_model.compile(loss=loss, 
                         optimizer=optimizer, 
                         metrics=metrics)
-    local_model.set_weights(global_weights)
-    data_shard = partitions[client_id]
-    clientbatch = batch_data(data_shard)
-    print(f"Training local model on client {client_id + 1}...")
-    local_model.fit(clientbatch, epochs=1, verbose=0)
-    return local_model.get_weights()
+    def client_modelupdate(client_id , global_weights):
+        local_model.set_weights(global_weights)
+        data_shard = partitions[client_id]
+        clientbatch = batch_data(data_shard)
+        print(f"Training local model on client {client_id + 1}...")
+        local_model.fit(clientbatch, epochs=1, verbose=0)
+        return local_model.get_weights()
+    return client_modelupdate
 
 x_test = x_test.astype('float32') / 255
 x_test = x_test.reshape((-1, 28, 28, 1))
 y_test = lb.fit_transform(y_test)
 test_batched = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(len(y_test))
 
-lr = 0.01 
-num_rounds = 25
-loss = 'categorical_crossentropy' # categorical_crossentropy because there are 10 classes (-1/n * sum(yi*log(yi_hat))
-metrics = ['accuracy'] # Additional metrics to monitor during training and evaluation.
-optimizer = SGD(learning_rate=lr, momentum=0.9) # lr -> rate at which it moves to minumum(must be exponentially decreasing), momentum -> parameter to speed up optimization
+client_modelupdate = client_model_update_generator()
 
-# Initialize global model
-build_shape = (28, 28, 1)
-smlp_global = CNNModel()
-global_model = smlp_global.build(10)
-global_acc_list = []
-global_loss_list = []
+def main(federated_averaging, file_name='FL_results'):
+    smlp_global = CNNModel()
+    global_model = smlp_global.build(10)
+    global_acc_list = []
+    global_loss_list = []
+    for round_num in range(num_rounds):
+            print(f"\n--- Round {round_num + 1} ---")
+            client_weights_list = []
+            global_weights = global_model.get_weights()
+            selected_clients_list = select_random_clients(client_frac)
+            for client_id in selected_clients_list:
+                client_weights = client_modelupdate(client_id, global_weights)
+                client_weights_list.append(client_weights)
 
+            print("Performing federated averaging...")
+            avgweights = federated_averaging(client_weights_list)
+            global_model.set_weights(avgweights)
 
-for round_num in range(num_rounds):
-        client_weights_list = []
-        global_weights = global_model.get_weights()
-        selected_clients_list = select_random_clients(1)
-        for client_id in selected_clients_list:
-            client_weights = client_modelupdate(client_id, global_weights)
-            client_weights_list.append(client_weights)
-
-        print("Performing federated averaging...")
-        avgweights = federated_averaging(client_weights_list)
-        global_model.set_weights(avgweights)
-
-        # Evaluate global model
-        for(X_test, Y_test) in test_batched:
-            global_acc, global_loss= test_model(X_test, Y_test, global_model, num_rounds)
-            global_acc_list.append(global_acc)
-            global_loss_list.append(global_loss)
+            # Evaluate global model
+            for(X_test, Y_test) in test_batched:
+                global_acc, global_loss= test_model(X_test, Y_test, global_model, num_rounds)
+                global_acc_list.append(global_acc)
+                global_loss_list.append(global_loss)
 
 
-print("plotting graph")
-plt.figure(figsize=(16, 4))
-plt.subplot(121)
-plt.plot(list(range(0, len(global_loss_list))), global_loss_list)
-plt.subplot(122)
-plt.plot(list(range(0, len(global_acc_list))), global_acc_list)
-print('total comm rounds', len(global_acc_list))
+    print("plotting graph")
+    plt.figure(figsize=(16, 4))
+    plt.subplot(121)
+    plt.plot(list(range(0, len(global_loss_list))), global_loss_list)
+    plt.subplot(122)
+    plt.plot(list(range(0, len(global_acc_list))), global_acc_list)
+    print('total comm rounds', len(global_acc_list))
 
-plt.savefig('image1.png')  # Save the plot to a file instead of displaying it
+    file_name = f"{file_name}_clients{num_clients}_rounds{num_rounds}_frac{client_frac}"
+    Path(f'{file_name}.png').parent.mkdir(parents=True, exist_ok=True)
 
+    plt.savefig(f'{file_name}.png')  # Save the plot to a file instead of displaying it
+
+    # write the data to a csv file
+    df = pd.DataFrame({'global_acc': global_acc_list, 'global_loss': global_loss_list})
+    df.to_csv(f'{file_name}.csv', index=False)
 
 
 
